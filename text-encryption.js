@@ -41,7 +41,7 @@ encryptMessage(data, password)
             expiration: 3600
         };
 
-        axios.post('http://localhost:7777/secret', payload)
+        axios.post('http://155.4.96.26:7777/secret', payload)
             .then((response) => {
                 if (response.data.status === 'success') {
                     const uid = response.data.data.uid;
@@ -70,7 +70,7 @@ encryptMessage(data, password)
 
 const decryptMessage = async (uid, password, format = 'utf8') => {
     try {
-        const { data } = await axios.get('http://localhost:7777/secret/' + uid);
+        const { data } = await axios.get('http://155.4.96.26:7777/secret/' + uid);
         // console.log('Response payload: ', data)
         const encryptedMsg = JSON.parse(data.secret.message);
         console.log('Encrypted Message: ', encryptedMsg)
