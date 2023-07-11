@@ -4,84 +4,91 @@ const CryptoJS = require('crypto-js');
 
 const CHUNK_SIZE = 64 * 1024; // 64 KB
 
-const encryptFileAndSendToAPI = async (filePath, apiUrl) => {
+const generateRandomPassword = (length) => {
+    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let password = '';
+    for (let i = 0; i < length; i++) {
+        password += characters.charAt(Math.floor(Math.random() * characters.length));
+    }
+    return password;
+};
+
+const encryptFileAndSendToAPI = async (filePath, apiUrl, password) => {
     try {
-        // Create a readable stream from the file
-        const fileStream = fs.createReadStream(filePath);
+        // Read the file as a buffer
+        const fileBuffer = fs.readFileSync(filePath);
+
+        // Convert the file buffer to a WordArray
+        const fileWordArray = CryptoJS.lib.WordArray.create(fileBuffer);
 
         // Generate a random IV
         const iv = CryptoJS.lib.WordArray.random(16);
 
-        // Initialize the AES cipher
-        const cipher = CryptoJS.AES.encrypt('', CryptoJS.enc.Utf8.parse('password'), {
+        // Encrypt the file data using AES with the provided password and IV
+        const encryptedData = CryptoJS.AES.encrypt(fileWordArray, password, {
             iv: iv,
             mode: CryptoJS.mode.CBC,
             padding: CryptoJS.pad.Pkcs7,
         });
 
-        // Create a writable stream to collect the encrypted chunks
-        const encryptedChunks = [];
-        const encryptedStream = CryptoJS.lib.StreamCipher.createEncryptor(
-            cipher.key,
-            {
-                iv: cipher.iv,
-                mode: CryptoJS.mode.CBC,
-                padding: CryptoJS.pad.Pkcs7,
-            }
-        );
-        encryptedStream.on('data', (chunk) => {
-            encryptedChunks.push(chunk);
-        });
+        // Convert the encrypted data and IV to base64 strings
+        const encryptedDataBase64 = encryptedData.toString();
+        const ivBase64 = iv.toString();
 
-        // Encrypt the file by reading and encrypting chunks of data
-        let bytesRead = 0;
-        fileStream.on('data', (chunk) => {
-            const chunkWordArray = CryptoJS.lib.WordArray.create(chunk);
-            encryptedStream.process(chunkWordArray);
-            bytesRead += chunk.length;
-        });
+        // Prepare the payload for the API request
+        const payload = {
+            message: encryptedDataBase64,
+            vector: ivBase64,
+            once: true,
+            expiration: 3600,
+        };
 
-        // When the entire file has been read, finalize the encryption
-        fileStream.on('end', () => {
-            encryptedStream.finish();
-            const encryptedData = CryptoJS.lib.WordArray.create(
-                [].concat(...encryptedChunks)
-            );
+        // Send the encrypted file data to the API
+        axios
+            .post(apiUrl, payload)
+            .then((response) => {
+                // Extract the UID from the API response
+                const uid = response.data.uid;
+                console.log('File encrypted and sent successfully. UID:', uid);
 
-            // Convert the encrypted data and IV to base64 strings
-            const encryptedDataBase64 = CryptoJS.enc.Base64.stringify(encryptedData);
-            const ivBase64 = CryptoJS.enc.Base64.stringify(iv);
+                // Fetch the encrypted message from the API using the UID
+                const fetchUrl = `${apiUrl}/${uid}`;
+                axios
+                    .get(fetchUrl)
+                    .then((response) => {
+                        // Extract the encrypted message from the API response
+                        const encryptedMessage = response.data.data.message;
 
-            // Prepare the payload for the API request
-            const payload = {
-                data: encryptedDataBase64,
-                iv: ivBase64,
-            };
+                        // Decrypt the message using the password and IV
+                        const decryptedData = CryptoJS.AES.decrypt(encryptedMessage, password, {
+                            iv: CryptoJS.enc.Hex.parse(response.data.data.vector),
+                            mode: CryptoJS.mode.CBC,
+                            padding: CryptoJS.pad.Pkcs7,
+                        });
 
-            // Send the encrypted file data to the API
-            axios
-                .post(apiUrl, payload)
-                .then((response) => {
-                    // Extract the UID from the API response
-                    const uid = response.data.uid;
-                    console.log('File encrypted and sent successfully. UID:', uid);
-                })
-                .catch((error) => {
-                    console.error('API Error:', error);
-                });
-        });
+                        // Convert the decrypted data to a buffer
+                        const decryptedBuffer = CryptoJS.lib.WordArray.create(decryptedData.words);
 
-        // Handle errors
-        fileStream.on('error', (error) => {
-            console.error('File read error:', error);
-        });
+                        // Save the decrypted file locally
+                        const decryptedFilePath = 'decrypted-mount-safa.pdf';
+                        fs.writeFileSync(decryptedFilePath, Buffer.from(decryptedBuffer.toString(), 'binary'));
+                        console.log('File decrypted and saved:', decryptedFilePath);
+                    })
+                    .catch((error) => {
+                        console.error('API Error:', error);
+                    });
+            })
+            .catch((error) => {
+                console.error('API Error:', error);
+            });
     } catch (error) {
         console.error('Error encrypting and sending file:', error);
     }
 };
 
 // Usage example
-const filePath = '/path/to/file.pdf';
+const filePath = 'mount-safa.pdf';
 const apiUrl = 'http://localhost:7777/file';
+const password = generateRandomPassword(32);
 
-encryptFileAndSendToAPI(filePath, apiUrl);
+encryptFileAndSendToAPI(filePath, apiUrl, password);
