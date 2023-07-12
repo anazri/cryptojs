@@ -1,8 +1,7 @@
-const fs = require('fs');
+const fs = require("fs");
+const openpgp = require('openpgp');
 const axios = require('axios');
 const CryptoJS = require('crypto-js');
-
-const CHUNK_SIZE = 64 * 1024; // 64 KB
 
 const generateRandomPassword = (length) => {
     const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -13,82 +12,75 @@ const generateRandomPassword = (length) => {
     return password;
 };
 
-const encryptFileAndSendToAPI = async (filePath, apiUrl, password) => {
-    try {
-        // Read the file as a buffer
-        const fileBuffer = fs.readFileSync(filePath);
+(async () => {
+    const password = generateRandomPassword(32);
 
-        // Convert the file buffer to a WordArray
-        const fileWordArray = CryptoJS.lib.WordArray.create(fileBuffer);
+    const {privateKey, publicKey, revocationCertificate} = await openpgp.generateKey({
+        type: 'ecc', // Type of the key, defaults to ECC
+        curve: 'curve25519', // ECC curve name, defaults to curve25519
+        userIDs: [{name: 'Jon Smith', email: 'jon@example.com'}], // you can pass multiple user IDs
+        passphrase: password, // protects the private key
+        format: 'armored' // output key format, defaults to 'armored' (other options: 'binary' or 'object')
+    });
 
-        // Generate a random IV
-        const iv = CryptoJS.lib.WordArray.random(16);
+    const privateKeyArmored = privateKey;
+    const publicKeyArmored = publicKey;
 
-        // Encrypt the file data using AES with the provided password and IV
-        const encryptedData = CryptoJS.AES.encrypt(fileWordArray, password, {
-            iv: iv,
-            mode: CryptoJS.mode.CBC,
-            padding: CryptoJS.pad.Pkcs7,
-        });
+    console.log('Password:', password);
+    console.log('Private Key:', privateKeyArmored);
+    console.log('Public Key:', publicKeyArmored);
+    console.log('Revocation Certificate:', revocationCertificate);
 
-        // Convert the encrypted data and IV to base64 strings
-        const encryptedDataBase64 = encryptedData.toString();
-        const ivBase64 = iv.toString();
+    // Encrypt the private key with a random password
+    const encryptedPrivateKey = CryptoJS.AES.encrypt(privateKeyArmored, password).toString();
 
-        // Prepare the payload for the API request
-        const payload = {
-            message: encryptedDataBase64,
-            vector: ivBase64,
-            once: true,
-            expiration: 3600,
-        };
+    // Send the encrypted private key to the API
+    const payload = {
+        once: true,
+        message: encryptedPrivateKey,
+        expiration: 3600
+    };
 
-        // Send the encrypted file data to the API
-        axios
-            .post(apiUrl, payload)
-            .then((response) => {
-                // Extract the UID from the API response
-                const uid = response.data.uid;
-                console.log('File encrypted and sent successfully. UID:', uid);
+    axios.post('http://155.4.96.26:7777/secret', payload)
+        .then(async (response) => {
+            if (response.data.status === 'success') {
+                const uid = response.data.data.uid;
+                console.log('UID:', uid);
+                const link = Buffer.from(uid + '.' + password).toString('base64');
+                console.log('Link:', 'http://localhost/t/d/' + link)
+                // Store the UID in a constant for further use
 
-                // Fetch the encrypted message from the API using the UID
-                const fetchUrl = `${apiUrl}/${uid}`;
-                axios
-                    .get(fetchUrl)
+                const plainData = fs.readFileSync("present.pptx");
+                console.log('Plain Data:', plainData)
+
+                const publicKey = await openpgp.readKey({armoredKey: publicKeyArmored});
+                const encrypted = await openpgp.encrypt({
+                    message: await openpgp.createMessage({ binary: plainData }),
+                    encryptionKeys: publicKey,
+                });
+                const apiUrl = 'http://155.4.96.26:7777/file'
+                const payload = {
+                    uid: uid,
+                    message: encrypted.toString(), // Pass the encrypted data here
+                };
+                console.log('Payload:', payload)
+                // Send the encrypted data to the API
+                axios.post(apiUrl, payload)
                     .then((response) => {
-                        // Extract the encrypted message from the API response
-                        const encryptedMessage = response.data.data.message;
-
-                        // Decrypt the message using the password and IV
-                        const decryptedData = CryptoJS.AES.decrypt(encryptedMessage, password, {
-                            iv: CryptoJS.enc.Hex.parse(response.data.data.vector),
-                            mode: CryptoJS.mode.CBC,
-                            padding: CryptoJS.pad.Pkcs7,
-                        });
-
-                        // Convert the decrypted data to a buffer
-                        const decryptedBuffer = CryptoJS.lib.WordArray.create(decryptedData.words);
-
-                        // Save the decrypted file locally
-                        const decryptedFilePath = 'decrypted-mount-safa.pdf';
-                        fs.writeFileSync(decryptedFilePath, Buffer.from(decryptedBuffer.toString(), 'binary'));
-                        console.log('File decrypted and saved:', decryptedFilePath);
+                        // Handle the API response
+                        console.log('API response:', response.data);
                     })
                     .catch((error) => {
+                        // Handle any errors that occurred during the API request
                         console.error('API Error:', error);
                     });
-            })
-            .catch((error) => {
-                console.error('API Error:', error);
-            });
-    } catch (error) {
-        console.error('Error encrypting and sending file:', error);
-    }
-};
 
-// Usage example
-const filePath = 'mount-safa.pdf';
-const apiUrl = 'http://localhost:7777/file';
-const password = generateRandomPassword(32);
-
-encryptFileAndSendToAPI(filePath, apiUrl, password);
+            } else {
+                console.log('Status is not success');
+                // Handle the case when the status is not success
+            }
+        })
+        .catch((error) => {
+            console.error('API Error:', error);
+        });
+})();
