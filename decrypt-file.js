@@ -1,8 +1,7 @@
 const axios = require('axios');
 const CryptoJS = require('crypto-js');
-const {writeFileSync} = require("fs");
-const openpgp = require('openpgp');
-const {readMessage} = require("openpgp");
+const {writeFileSync, readFileSync, statSync} = require("fs");
+const {readMessage, message, decrypt, decryptKey, readPrivateKey} = require("openpgp");
 
 function decodeBase64Url(base64Url) {
     const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
@@ -17,16 +16,19 @@ function decryptPrivateKey(encryptedPrivateKey, password) {
 }
 
 async function decryptFile(encryptedFile, privateKeyArmored, password) {
-    const privateKey = await openpgp.decryptKey({
-        privateKey: await openpgp.readPrivateKey({ armoredKey: privateKeyArmored }),
+    const privateKey = await decryptKey({
+        privateKey: await readPrivateKey({armoredKey: privateKeyArmored}),
         passphrase: password
     });
 
-    const encryptedMessage = await openpgp.readMessage({ armoredMessage: Uint8ArrayToString(encryptedFile) });
+    const encryptedMessage = {
+        message: await message.fromBinary(encryptedFile),
+        privateKeys: [privateKey],
+    };
 
-    const decryptedData = await openpgp.decrypt({
+    const decryptedData = await decrypt({
         message: encryptedMessage,
-        decryptionKeys: [privateKey]
+        privateKeys: [privateKey],
     });
 
     return decryptedData.data;
@@ -42,7 +44,13 @@ function Uint8ArrayToString(uint8Array) {
 
 async function getFileFromAPI(url) {
     const response = await axios.get(url, {responseType: 'arraybuffer'});
-    return new Uint8Array(response.data);
+    const headers = response.headers;
+    const fileData = new Uint8Array(response.data);
+    console.log('File length:', fileData.length);
+    return {
+        headers: headers,
+        data: fileData,
+    };
 }
 
 async function processLink(link) {
@@ -58,23 +66,39 @@ async function processLink(link) {
         const encryptedPrivateKey = privateKeyResponse.data.secret.message;
         // Decrypt the private key
         const privateKey = decryptPrivateKey(encryptedPrivateKey, password);
-
         // Download the encrypted file from the API
         const fileUrl = `http://localhost:7777/file/${uid}`;
-        const encryptedFile = await getFileFromAPI(fileUrl);
-        console.log('Encrypted File:', encryptedFile);
+        const {headers, data} = await getFileFromAPI(fileUrl);
+        const ext = headers['x-ext']
         // Decrypt the file
-        const decryptedFile = await decryptFile(encryptedFile, privateKey, password);
-        console.log('Decrypted File:', decryptedFile.toString());
+        const decryptedFile = await decryptFile(data, privateKey, password);
 
         // Save the decrypted file locally
-        const filename = `decrypted-${uid}`;
-        writeFileSync(filename, decryptedFile);
+        const filename = `decrypted-${uid}${ext}`;
+        writeFileSync(filename, decryptedFile, 'binary');
         console.log(`Decrypted file saved as ${filename}`);
+        const fileSize = getFileSize(filename);
+        console.log('File Size (KB):', fileSize.kilobytes);
     } catch (error) {
         console.error('Error:', error.message);
     }
 }
 
-const link = 'http://localhost/f/d/MTkwMzUzOTAtNzVlYi00MGRiLThhMTItMjNlMzM0OTZkOTQ2Lko4YmhtVGJwUGdlUlhGVkZMelczS2VtcEhuTzl0NFZM';
+const readLinkFromOutputFile = (filePath) => {
+    const content = readFileSync(filePath, 'utf8');
+    const linkStartIndex = content.indexOf('Link: ') + 6;
+    const linkEndIndex = content.indexOf('\n', linkStartIndex);
+    return content.slice(linkStartIndex, linkEndIndex).trim();
+};
+
+const getFileSize = (filePath) => {
+    const stats = statSync(filePath);
+    const fileSizeInBytes = stats.size;
+    const fileSizeInKB = fileSizeInBytes / 1024;
+    return {
+        kilobytes: fileSizeInKB
+    };
+};
+
+const link = readLinkFromOutputFile('output.txt');
 processLink(link);

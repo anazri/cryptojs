@@ -3,6 +3,7 @@ const openpgp = require('openpgp');
 const http = require('http');
 const CryptoJS = require('crypto-js');
 const {extname} = require("path");
+const {statSync} = require("fs");
 
 const generateRandomPassword = (length) => {
     const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -36,17 +37,21 @@ const encryptAndSendFile = async (filePath, apiUrl, publicKeyArmored, uid, passw
         });
     });
 
+    let totalSize = 0;
+
     readStream.on('data', async (chunk) => {
         const encryptedChunk = await openpgp.encrypt({
             message: await openpgp.createMessage({ binary: chunk }),
             encryptionKeys: publicKey,
         });
-
+        const chunkSize = Buffer.byteLength(encryptedChunk, 'utf8');
+        totalSize += chunkSize;
         req.write(encryptedChunk);
     });
 
     readStream.on('end', () => {
         req.end();
+        console.log('Total size:', totalSize, 'bytes');
     });
 };
 
@@ -63,6 +68,7 @@ const encryptAndSendFile = async (filePath, apiUrl, publicKeyArmored, uid, passw
 
     const privateKeyArmored = privateKey;
     const publicKeyArmored = publicKey;
+    console.log('Private key:\n', privateKeyArmored);
     // Encrypt the private key with a random password
     const encryptedPrivateKey = CryptoJS.AES.encrypt(privateKeyArmored, password).toString();
 
@@ -93,7 +99,9 @@ const encryptAndSendFile = async (filePath, apiUrl, publicKeyArmored, uid, passw
                 console.log('Link:', 'http://localhost/f/d/' + link);
                 // Store the UID in a constant for further use
 
-                const filePath = 'mount-safa.pdf'; // Replace with the actual file path
+                const filePath = 'secret-file.txt'; // Replace with the actual file path
+                const fileSize = getFileSize(filePath);
+                console.log('File size:', fileSize.kilobytes, 'KB');
                 const apiUrl = 'http://155.4.96.26:7777/file'; // Replace with the API URL
 
                 encryptAndSendFile(filePath, apiUrl, publicKeyArmored, uid, password);
@@ -106,3 +114,13 @@ const encryptAndSendFile = async (filePath, apiUrl, publicKeyArmored, uid, passw
             console.error('API Error:', error);
         });
 })();
+
+const getFileSize = (filePath) => {
+    const stats = statSync(filePath);
+    const fileSizeInBytes = stats.size;
+    const fileSizeInKB = fileSizeInBytes / 1024;
+    const fileSizeInMB = fileSizeInKB / 1024;
+    return {
+        kilobytes: fileSizeInKB
+    };
+};
