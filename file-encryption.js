@@ -2,8 +2,10 @@ const {createMessage, encrypt, readMessage, decrypt} = require('openpgp');
 const { readFileSync, statSync} = require('fs');
 const {post} = require("axios");
 const {extname} = require("path");
+const CryptoJS = require('crypto-js');
 
 const filePath = process.argv[2];
+const randomPIN = process.argv[3];
 const generateRandomPassword = (length) => {
     const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
     let password = '';
@@ -62,6 +64,12 @@ const getFileSize = (filePath) => {
             console.log(`uid: ${response.data.uid}`);
             const link = Buffer.from(uid + '.' + password).toString('base64');
             console.log(`Link: http://localhost/f/d/${link}`)
+            if (randomPIN !== undefined && randomPIN.toString().length === 6) {
+                console.log('PIN:', randomPIN);
+                const encryptedLink = CryptoJS.AES.encrypt(link, randomPIN.toString()).toString().replace(/=/g, '');
+                console.log('Encrypted Link: ', 'http://localhost/f/d/p/' + encryptedLink);
+                console.log('Decrypted Link: ', CryptoJS.AES.decrypt(encryptedLink, randomPIN.toString()).toString(CryptoJS.enc.Utf8));
+            }
         }).catch((error) => {
             console.error(error);
         });
